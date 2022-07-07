@@ -11,10 +11,10 @@ import sys
 
 from argparse import Namespace
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 from omegaconf import MISSING, II, OmegaConf
 
-from fairseq.data import BinarizedAudioDataset, FileAudioDataset
+from fairseq.data import BinarizedAudioDataset, FileAudioDataset, CombinedFileAudioDataset
 from fairseq.dataclass import FairseqDataclass, ChoiceEnum
 from fairseq.data.text_compressor import TextCompressionLevel
 
@@ -48,6 +48,10 @@ class InferredW2vConfig:
 @dataclass
 class AudioPretrainingConfig(FairseqDataclass):
     data: str = field(default=MISSING, metadata={"help": "path to data directory"})
+    train_datasets_weights: str = field(
+        default='1',
+        metadata={"help": "weights, according to which samples from different train datasets will be included in batch"},
+    )
     labels: Optional[str] = field(
         default=None,
         metadata={"help": "extension of the label file to load, used for fine-tuning"},
@@ -159,10 +163,12 @@ class AudioPretrainingTask(FairseqTask):
                 **self._get_mask_precompute_kwargs(task_cfg),
             )
         else:
-            manifest_path = os.path.join(data_path, "{}.tsv".format(split))
+            #manifest_path = os.path.join(data_path, "{}.tsv".format(split))
 
-            self.datasets[split] = FileAudioDataset(
-                manifest_path=manifest_path,
+            self.datasets[split] = CombinedFileAudioDataset(
+                data_path=data_path,
+                splits=split,
+                group_weights = [float(weight.strip()) for weight in self.cfg.train_datasets_weights.split(',')] if len(split.split(';')) > 1 else [1],
                 sample_rate=task_cfg.get("sample_rate", self.cfg.sample_rate),
                 max_sample_size=self.cfg.max_sample_size,
                 min_sample_size=self.cfg.min_sample_size,

@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 import io
+import soundfile as sf
 
 import numpy as np
 import torch
@@ -21,6 +22,8 @@ from fairseq.data.audio.audio_utils import (
     is_sf_audio_data,
 )
 from fairseq.data.text_compressor import TextCompressor, TextCompressionLevel
+
+from fairseq.data.weighted_sampler import WeightedGroupsBatchSampler
 
 
 logger = logging.getLogger(__name__)
@@ -243,6 +246,126 @@ class RawAudioDataset(FairseqDataset):
                 f"{len(self.buckets)} bucket(s) for the audio dataset: "
                 f"{self.buckets}"
             )
+
+class CombinedFileAudioDataset(RawAudioDataset):
+    def __init__(
+        self,
+        data_path,
+        splits,
+        sample_rate,
+        group_weights=None,
+        max_sample_size=None,
+        min_sample_size=0,
+        shuffle=True,
+        pad=False,
+        normalize=False,
+        num_buckets=0,
+        compute_mask_indices=False,
+        text_compression_level=TextCompressionLevel.none,
+        seed=42,
+        **mask_compute_kwargs,
+    ):
+        super().__init__(
+            sample_rate=sample_rate,
+            max_sample_size=max_sample_size,
+            min_sample_size=min_sample_size,
+            shuffle=shuffle,
+            pad=pad,
+            normalize=normalize,
+            compute_mask_indices=compute_mask_indices,
+            **mask_compute_kwargs,
+        )
+
+        splits = splits.split(';')
+        
+        if group_weights is None:
+            assert len(splits) == 1, f"Parameter group_weights can be omitted when only 1 group exists." \
+                                              f"You specified {len(group_weights)} groups."
+            group_weights = [1.0]
+        self.group_weights = group_weights
+
+        self.text_compressor = TextCompressor(level=text_compression_level)
+
+        skipped = 0
+        self.fnames = []
+        self.sizes = []
+        groups = []
+        self.groups_num = 0
+        self.epoch = 0
+        self.seed = seed
+
+        for group_idx, split in enumerate(splits):
+            self.groups_num += 1
+            with open(os.path.join(data_path, split + '.tsv'), 'r') as file:
+                root_dir = file.readline().strip()
+                for i, line in enumerate(file):
+                    items = line.strip().split('\t')
+                    assert len(items) == 2, line
+                    sz = int(items[1])
+                    if min_sample_size is not None and sz < min_sample_size:
+                        skipped += 1
+                        continue
+                    self.fnames.append(self.text_compressor.compress(os.path.join(root_dir + items[0])))
+                    groups.append(group_idx)
+                    self.sizes.append(sz)
+        logger.info(f"loaded {len(self.fnames)}, skipped {skipped} samples")
+
+        self.groups = np.array(groups)
+        self.sizes = np.array(self.sizes, dtype=np.int64)
+
+        try:
+            import pyarrow
+
+            self.fnames = pyarrow.array(self.fnames)
+        except:
+            logger.debug(
+                "Could not create a pyarrow array. Please install pyarrow for better performance"
+            )
+            pass
+
+        self.set_bucket_info(num_buckets)
+
+    def __getitem__(self, index):
+        fn = self.fnames[index]
+        fn = fn if isinstance(self.fnames, list) else fn.as_py()
+        fn = self.text_compressor.decompress(fn)
+        path_or_fp = fn
+        _path, slice_ptr = parse_path(path_or_fp)
+        if len(slice_ptr) == 2:
+            byte_data = read_from_stored_zip(_path, slice_ptr[0], slice_ptr[1])
+            assert is_sf_audio_data(byte_data)
+            path_or_fp = io.BytesIO(byte_data)
+
+        wav, curr_sample_rate = sf.read(path_or_fp, dtype="float32")
+
+        feats = torch.from_numpy(wav).float()
+        feats = self.postprocess(feats, curr_sample_rate)
+        return {"id": index, "source": feats}
+
+    def ordered_indices(self):
+        # All batching logic will implemented in self.batch_by_size
+        return []
+    
+    def batch_by_size(self, indices=[], max_tokens=None, max_sentences=None, required_batch_size_multiple=None):
+        group_idxs = [self.get_group_indexes(group) for group in range(self.groups_num)]
+
+        return WeightedGroupsBatchSampler(
+            groups=group_idxs,
+            weights=self.group_weights,
+            batch_size=max_sentences,
+            drop_last=True
+        )
+
+    def set_epoch(self, epoch):
+        """Will receive the updated epoch number at the beginning of the epoch."""
+        self.epoch = epoch
+
+    def get_group_indexes(self, group):
+        """
+        @param group: index of requested group starting from 0
+        @return: list of element indexes where group filed = group
+        """
+        return list([i for i, curr_group in enumerate(self.groups) if curr_group==group])
 
 
 class FileAudioDataset(RawAudioDataset):

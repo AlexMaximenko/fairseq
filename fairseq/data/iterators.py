@@ -16,6 +16,7 @@ from typing import Iterator, List
 import numpy as np
 import torch
 from fairseq.data import data_utils
+from fairseq.data.weighted_sampler import WeightedGroupsBatchSampler
 
 
 logger = logging.getLogger(__name__)
@@ -477,34 +478,44 @@ class EpochBatchIterator(EpochBatchIterating):
     def _get_iterator_for_epoch(
         self, epoch, shuffle, fix_batches_to_gpus=False, offset=0
     ):
-        if self.reuse_dataloader and self.dataloader is not None:
+        if self.reuse_dataloader and self.dataloader is not None and not isinstance(self.batch_sampler, WeightedGroupsBatchSampler):
             self.batch_sampler.make_batches_for_epoch(epoch, offset)
             itr = self.dataloader
         else:
-            self.batch_sampler = FrozenBatchSampler(
-                self.ordered_batches,
-                epoch,
-                fix_batches_to_gpus,
-                shuffle,
-                initial_offset=offset,
-            )
+            if isinstance(self.batch_sampler, WeightedGroupsBatchSampler):
+                self.batch_sampler.update(epoch)
+            
+                if self.num_workers > 0:
+                    os.environ["PYTHONWARNINGS"] = "ignore:semaphore_tracker:UserWarning"
 
-            if offset > 0 and len(self.batch_sampler) == 0:
-                return None
+                sampler_to_use = list(
+                    ShardedIterator(tuple(self.batch_sampler), self.num_shards, self.shard_id, fill_value=[])
+                )
+            else:
+                self.batch_sampler = FrozenBatchSampler(
+                    self.ordered_batches,
+                    epoch,
+                    fix_batches_to_gpus,
+                    shuffle,
+                    initial_offset=offset,
+                )
 
-            if self.num_workers > 0:
-                os.environ["PYTHONWARNINGS"] = "ignore:semaphore_tracker:UserWarning"
+                if offset > 0 and len(self.batch_sampler) == 0:
+                    return None
 
-            # Create data loader
-            itr = torch.utils.data.DataLoader(
-                self.dataset,
-                collate_fn=self.collate_fn,
-                batch_sampler=self.batch_sampler,
-                num_workers=self.num_workers,
-                timeout=self.timeout,
-                pin_memory=True,
-                persistent_workers=self.num_workers > 0,
-            )
+                if self.num_workers > 0:
+                    os.environ["PYTHONWARNINGS"] = "ignore:semaphore_tracker:UserWarning"
+
+                # Create data loader
+                itr = torch.utils.data.DataLoader(
+                    self.dataset,
+                    collate_fn=self.collate_fn,
+                    batch_sampler=self.batch_sampler,
+                    num_workers=self.num_workers,
+                    timeout=self.timeout,
+                    pin_memory=True,
+                    persistent_workers=self.num_workers > 0,
+                )
 
             if self.reuse_dataloader:
                 self.dataloader = itr
