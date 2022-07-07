@@ -491,6 +491,16 @@ class EpochBatchIterator(EpochBatchIterating):
                 sampler_to_use = list(
                     ShardedIterator(tuple(self.batch_sampler), self.num_shards, self.shard_id, fill_value=[])
                 )
+
+                itr = torch.utils.data.DataLoader(
+                    self.dataset,
+                    collate_fn=self.collate_fn,
+                    batch_sampler=sampler_to_use,
+                    num_workers=self.num_workers,
+                    timeout=self.timeout,
+                    pin_memory=True,
+                    persistent_workers=self.num_workers > 0,
+                )
             else:
                 self.batch_sampler = FrozenBatchSampler(
                     self.ordered_batches,

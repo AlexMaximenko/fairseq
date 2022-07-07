@@ -165,20 +165,34 @@ class AudioPretrainingTask(FairseqTask):
         else:
             #manifest_path = os.path.join(data_path, "{}.tsv".format(split))
 
-            self.datasets[split] = CombinedFileAudioDataset(
-                data_path=data_path,
-                splits=split,
-                group_weights = [float(weight.strip()) for weight in self.cfg.train_datasets_weights.split(',')] if len(split.split(';')) > 1 else [1],
-                sample_rate=task_cfg.get("sample_rate", self.cfg.sample_rate),
-                max_sample_size=self.cfg.max_sample_size,
-                min_sample_size=self.cfg.min_sample_size,
-                pad=task_cfg.labels is not None or task_cfg.enable_padding,
-                normalize=task_cfg.normalize,
-                num_buckets=self.cfg.num_batch_buckets or int(self.cfg.tpu),
-                compute_mask_indices=(self.cfg.precompute_mask_indices or self.cfg.tpu),
-                text_compression_level=text_compression_level,
-                **self._get_mask_precompute_kwargs(task_cfg),
-            )
+            if len(split.split(';')) > 1:
+                self.datasets[split] = CombinedFileAudioDataset(
+                    data_path=data_path,
+                    splits=split,
+                    group_weights = [float(weight.strip()) for weight in self.cfg.train_datasets_weights.split(',')],
+                    sample_rate=task_cfg.get("sample_rate", self.cfg.sample_rate),
+                    max_sample_size=self.cfg.max_sample_size,
+                    min_sample_size=self.cfg.min_sample_size,
+                    pad=task_cfg.labels is not None or task_cfg.enable_padding,
+                    normalize=task_cfg.normalize,
+                    num_buckets=self.cfg.num_batch_buckets or int(self.cfg.tpu),
+                    compute_mask_indices=(self.cfg.precompute_mask_indices or self.cfg.tpu),
+                    text_compression_level=text_compression_level,
+                    **self._get_mask_precompute_kwargs(task_cfg),
+                )
+            else:
+                self.datasets[split] = FileAudioDataset(
+                    manifest_path=os.path.join(data_path, split + '.tsv'),
+                    sample_rate=task_cfg.get("sample_rate", self.cfg.sample_rate),
+                    max_sample_size=self.cfg.max_sample_size,
+                    min_sample_size=self.cfg.min_sample_size,
+                    pad=task_cfg.labels is not None or task_cfg.enable_padding,
+                    normalize=task_cfg.normalize,
+                    num_buckets=self.cfg.num_batch_buckets or int(self.cfg.tpu),
+                    compute_mask_indices=(self.cfg.precompute_mask_indices or self.cfg.tpu),
+                    text_compression_level=text_compression_level,
+                    **self._get_mask_precompute_kwargs(task_cfg),
+                )
 
         if self.cfg.tpu and task_cfg.inferred_w2v_config.mask_channel_prob == 0.0:
             logger.info(
