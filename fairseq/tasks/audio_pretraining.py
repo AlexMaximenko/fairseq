@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from omegaconf import MISSING, II, OmegaConf
 
-from fairseq.data import BinarizedAudioDataset, FileAudioDataset
+from fairseq.data import BinarizedAudioDataset, FileAudioDataset, CombinedFileAudioDataset
 from fairseq.dataclass import FairseqDataclass, ChoiceEnum
 from fairseq.data.text_compressor import TextCompressionLevel
 
@@ -89,6 +89,11 @@ class AudioPretrainingConfig(FairseqDataclass):
         },
     )
 
+    train_datasets_weights: Optional[str] = field(
+        default=None,
+        metadata={"help": "weights, according to which samples from different train datasets will be included in batch"},
+    )
+
     inferred_w2v_config: Optional[InferredW2vConfig] = field(
         default=None,
         metadata={
@@ -161,8 +166,10 @@ class AudioPretrainingTask(FairseqTask):
         else:
             manifest_path = os.path.join(data_path, "{}.tsv".format(split))
 
-            self.datasets[split] = FileAudioDataset(
-                manifest_path=manifest_path,
+            self.datasets[split] = CombinedFileAudioDataset(
+                data_path=data_path,
+                splits=split,
+                group_weights=self.cfg.train_datasets_weights,
                 sample_rate=task_cfg.get("sample_rate", self.cfg.sample_rate),
                 max_sample_size=self.cfg.max_sample_size,
                 min_sample_size=self.cfg.min_sample_size,
