@@ -347,6 +347,8 @@ class CombinedFileAudioDataset(RawAudioDataset):
         # All batching logic will implemented in self.batch_by_size
         if self.groups_num == 1:
             return super().ordered_indices()
+        else:
+            return []
 
     def batch_by_size(self, indices=[], max_tokens=None, max_sentences=None, required_batch_size_multiple=None):
         if self.groups_num == 1:
