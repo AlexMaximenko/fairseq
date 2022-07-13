@@ -21,6 +21,7 @@ from fairseq.data.audio.audio_utils import (
     is_sf_audio_data,
 )
 from fairseq.data.text_compressor import TextCompressor, TextCompressionLevel
+from fairseq.data.weighted_sampler import WeightedGroupsBatchSampler
 
 
 logger = logging.getLogger(__name__)
