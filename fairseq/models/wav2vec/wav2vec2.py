@@ -288,6 +288,18 @@ class Wav2Vec2Config(FairseqDataclass):
         metadata={"help": "Positional encoding type to use in conformer"},
     )
     fp16: bool = field(default=False, metadata={"help": "If fp16 is being used"})
+    use_preprocessed_features: bool = field(
+        default=False,
+        metadata={
+            "help": "use raw wavs as inputs or preprocessed features"
+        }
+    )
+    features_num: int = field(
+        default=64,
+        metadata={
+            "help": "features_dim if use_preprocessed_features = True"
+        }
+    )
 
 
 @register_model("wav2vec2", dataclass=Wav2Vec2Config)
@@ -298,12 +310,18 @@ class Wav2Vec2Model(BaseFairseqModel):
 
         feature_enc_layers = eval(cfg.conv_feature_layers)
         self.embed = feature_enc_layers[-1][0]
+        self.use_preprocessed_features = cfg.use_preprocessed_features
+        if self.use_preprocessed_features:
+            self.features_num = cfg.features_num
+        else:
+            self.features_num = 1
 
         self.feature_extractor = ConvFeatureExtractionModel(
             conv_layers=feature_enc_layers,
             dropout=0.0,
             mode=cfg.extractor_mode,
             conv_bias=cfg.conv_bias,
+            first_conv_input_dim=self.features_num
         )
 
         self.post_extract_proj = (
@@ -823,6 +841,7 @@ class ConvFeatureExtractionModel(nn.Module):
         dropout: float = 0.0,
         mode: str = "default",
         conv_bias: bool = False,
+        first_conv_input_dim=1,
     ):
         super().__init__()
 
@@ -867,7 +886,8 @@ class ConvFeatureExtractionModel(nn.Module):
             else:
                 return nn.Sequential(make_conv(), nn.Dropout(p=dropout), nn.GELU())
 
-        in_d = 1
+
+        in_d = first_conv_input_dim
         self.conv_layers = nn.ModuleList()
         for i, cl in enumerate(conv_layers):
             assert len(cl) == 3, "invalid conv definition: " + str(cl)
@@ -889,7 +909,8 @@ class ConvFeatureExtractionModel(nn.Module):
     def forward(self, x):
 
         # BxT -> BxCxT
-        x = x.unsqueeze(1)
+        if len(x.shape) == 2:
+            x = x.unsqueeze(1)
 
         for conv in self.conv_layers:
             x = conv(x)

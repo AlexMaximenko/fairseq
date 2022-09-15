@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from omegaconf import MISSING, II, OmegaConf
 
-from fairseq.data import BinarizedAudioDataset, FileAudioDataset
+from fairseq.data import BinarizedAudioDataset, FileAudioDataset, CombinedFileAudioDataset
 from fairseq.dataclass import FairseqDataclass, ChoiceEnum
 from fairseq.data.text_compressor import TextCompressionLevel
 
@@ -89,11 +89,30 @@ class AudioPretrainingConfig(FairseqDataclass):
         },
     )
 
+    train_datasets_weights: Optional[str] = field(
+        default=None,
+        metadata={"help": "weights, according to which samples from different train datasets will be included in batch"},
+    )
+
     inferred_w2v_config: Optional[InferredW2vConfig] = field(
         default=None,
         metadata={
             "help": "wav2vec 2.0 masking arguments used to pre-compute masks (required for TPU)",
         },
+    )
+
+    use_preprocessed_features: bool = field(
+        default=False,
+        metadata={
+            "help": "use raw wavs as inputs or preprocessed features"
+        }
+    )
+
+    features_num: int = field(
+        default=64,
+        metadata={
+            "help": "features_dim if use_preprocessed_features = True"
+        }
     )
 
     tpu: bool = II("common.tpu")
@@ -161,8 +180,10 @@ class AudioPretrainingTask(FairseqTask):
         else:
             manifest_path = os.path.join(data_path, "{}.tsv".format(split))
 
-            self.datasets[split] = FileAudioDataset(
-                manifest_path=manifest_path,
+            self.datasets[split] = CombinedFileAudioDataset(
+                data_path=data_path,
+                splits=split,
+                group_weights=self.cfg.train_datasets_weights,
                 sample_rate=task_cfg.get("sample_rate", self.cfg.sample_rate),
                 max_sample_size=self.cfg.max_sample_size,
                 min_sample_size=self.cfg.min_sample_size,
@@ -171,6 +192,8 @@ class AudioPretrainingTask(FairseqTask):
                 num_buckets=self.cfg.num_batch_buckets or int(self.cfg.tpu),
                 compute_mask_indices=(self.cfg.precompute_mask_indices or self.cfg.tpu),
                 text_compression_level=text_compression_level,
+                use_preprocessed_features=self.cfg.use_preprocessed_features,
+                features_num=self.cfg.features_num,
                 **self._get_mask_precompute_kwargs(task_cfg),
             )
 
